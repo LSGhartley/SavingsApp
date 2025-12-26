@@ -1,6 +1,6 @@
 // services/aiService.ts
 
-const OPENAI_API_KEY = process.env.PUBLIC_OPENAI_API_KEY || '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'; // <--- PASTE YOUR KEY HERE
+const OPENAI_API_KEY = process.env.PUBLIC_OPENAI_API_KEY; // <--- PASTE YOUR KEY HERE
 
 export const classifyTransaction = async (description: string, amount: number) => {
   try {

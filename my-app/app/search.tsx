@@ -4,6 +4,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { searchTransactions } from '../services/statementService';
 import { useAuth } from '../contexts/AuthProvider';
+import { supabase } from '../lib/supabase';
 
 export default function SearchScreen() {
   const router = useRouter();
@@ -13,6 +14,7 @@ export default function SearchScreen() {
   const [query, setQuery] = useState((q as string) || '');
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [aiAnswer, setAiAnswer] = useState('');
 
   useEffect(() => {
     // If we came from dashboard with text, search immediately
@@ -21,11 +23,23 @@ export default function SearchScreen() {
 
   const performSearch = async (text: string) => {
     setQuery(text);
-    if (text.length < 2) return; // Don't search for single letters
+    if (text.length < 3) return; // Don't search for single letters
 
     setLoading(true);
-    const data = await searchTransactions(user?.id as string, text);
-    setResults(data);
+  // 1. Run Standard Search (Keep existing)
+    const dbData = await searchTransactions(user?.id as string, text);
+    setResults(dbData);
+
+    // 2. Run AI Search (New!)
+    // Only run if the user stops typing for 1 second (debounce) or hits enter
+    // For simplicity, we'll run it here but typically you'd debounce this.
+    const { data: aiData } = await supabase.functions.invoke('ai-search', {
+      body: { query: text }
+    });
+    
+    if (aiData?.answer) {
+      setAiAnswer(aiData.answer);
+    }
     setLoading(false);
   };
 
@@ -66,18 +80,22 @@ export default function SearchScreen() {
       {loading ? (
         <ActivityIndicator style={{marginTop: 50}} color="#000" />
       ) : (
+        
         <FlatList
           data={results}
           keyExtractor={item => item.id}
           renderItem={renderItem}
           contentContainerStyle={{padding: 20}}
-          ListEmptyComponent={
-            query.length > 0 ? (
-              <Text style={styles.empty}>No results found for "{query}"</Text>
-            ) : (
-              <Text style={styles.empty}>Type to search your history</Text>
-            )
+       // --- NEW: AI ANSWER GOES HERE ---
+          ListHeaderComponent={
+            aiAnswer ? (
+              <View style={styles.aiBox}>
+                <Text style={styles.aiTitle}>🤖 AI Insight</Text>
+                <Text style={styles.aiText}>{aiAnswer}</Text>
+              </View>
+            ) : null
           }
+          // --------------------------------
         />
       )}
     </SafeAreaView>

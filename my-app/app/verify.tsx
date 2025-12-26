@@ -17,6 +17,7 @@ export default function VerifyScreen() {
   const router = useRouter();
   // 1. ADD 'filePath' to this line:
   const { text, statementId, year, filePath } = useLocalSearchParams();
+  const [meta, setMeta] = useState({ bank: '', account: '' });
 
   const [items, setItems] = useState<TransactionWithCategory[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,15 +49,20 @@ const runAIProcess = async () => {
 
         if (error) throw error;
         if (!data.success) throw new Error(data.error || 'Server processing failed');
+        // 1. Save Metadata to State
+        setMeta(data.data.metadata || { bank: 'Unknown', account: 'Unknown' });  
 
         // Map the server result to match our app's transaction format
         // (We generate a temporary ID using the index)
-        initialData = data.data.map((t: any, index: number) => ({
-          id: `pdf-${index}`, 
+        // 2. Set Items (Note: data.data.transactions is the new list)
+        initialData = data.data.transactions.map((t: any, index: number) => ({
+          id: `pdf-${index}`,
           date: t.date,
-          desc: t.desc, 
-          amount: t.amount,
-          type: t.type.toLowerCase(), // Ensure 'expense'/'income' is lowercase
+          desc: t.desc,
+          // FIX: Ensure amount is always positive using Math.abs()
+          amount: Math.abs(t.amount),
+          type: t.type.toLowerCase(),
+          category: t.category, // AI now does this for us!
           selected: true
         }));
       } 
@@ -132,16 +138,34 @@ const runAIProcess = async () => {
     setLoading(true);
     setStatus("Saving to database...");
 
+    // A. Update Statement Metadata (Bank/Account)
+  const { error: updateError } = await supabase
+    .from('statements')
+    .update({
+      origin_bank: meta.bank,
+      account_number: meta.account
+    })
+    .eq('id', statementId);
+
+  if (updateError) console.error("Meta save failed", updateError);
+
     // 3. Save items (now including the 'category' field!)
     const result = await saveTransactions(statementId as string, items);
 
     if (result.success) {
-      const income = items.filter(i => i.selected && i.type === 'income').reduce((s, i) => s + i.amount, 0);
-      const expense = items.filter(i => i.selected && i.type === 'expense').reduce((s, i) => s + i.amount, 0);
+      const rawIncome = items.filter(i => i.selected && i.type === 'income').reduce((s, i) => s + i.amount, 0);
+      const rawExpense = items.filter(i => i.selected && i.type === 'expense').reduce((s, i) => s + i.amount, 0);
+      const incomeCents = Math.round(rawIncome * 100);
+      const expenseCents = Math.round(rawExpense * 100);
+
+      // NEW: Trigger Embedding in background (don't await it to keep UI fast)
+      supabase.functions.invoke('embed-statement', {
+        body: { statementId: statementId }
+      });
       
       router.push({
         pathname: '/result',
-        params: { income, expense, statementId: statementId as string }
+        params: { income: incomeCents, expense: expenseCents, statementId: statementId as string }
       });
     } else {
       alert("Failed to save data. Try again.");
@@ -161,9 +185,13 @@ const runAIProcess = async () => {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Verify Data</Text>
-        <Text style={styles.subtitle}>We found {items.length} transactions.</Text>
-      </View>
+   <Text style={styles.title}>Verify Data</Text>
+   {/* NEW: Show extracted bank info */}
+   <Text style={{color: '#3182CE', fontWeight: 'bold', marginTop: 4}}>
+     {meta.bank} • {meta.account}
+   </Text>
+   <Text style={styles.subtitle}>...</Text>
+</View>
 
       <View style={styles.summaryCard}>
         <View style={styles.summaryCol}>

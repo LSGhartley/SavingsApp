@@ -1,224 +1,195 @@
-import React, { useState, useCallback } from 'react';
-import { 
-  StyleSheet, 
-  Text, 
-  View, 
-  SafeAreaView, 
-  ScrollView, 
-  Pressable, 
-  StatusBar, 
-  RefreshControl,
-  ActivityIndicator
-} from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { StyleSheet, Text, View, ScrollView, RefreshControl, Dimensions, Pressable, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { supabase } from '@/lib/supabase';
+import { LineChart } from 'react-native-chart-kit'; // <--- The new library
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/contexts/AuthProvider';
-import { TrendChart } from '@/components/TrendChart';
+import { supabase } from '@/lib/supabase';
+import { fetchMonthlyTrends, fetchPreviousMonthData, fetchRecentHabits } from '@/services/dashboardService';
 
-// Define the shape of our data
-interface Statement {
-  id: string;
-  month: number;
-  year: number;
-  total_income: number; // Stored as cents
-  total_expenses: number; // Stored as cents
-  created_at: string;
-}
+
+const screenWidth = Dimensions.get("window").width;
 
 export default function Dashboard() {
-  const router = useRouter();
   const { user } = useAuth();
+  const router = useRouter();
   
-  const [statements, setStatements] = useState<Statement[]>([]);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [chartData, setChartData] = useState<any>(null);
+  const [insight, setInsight] = useState<string>('Analyzing your spending...');
+  const [insightLoading, setInsightLoading] = useState(true);
+// ... inside component ...
+const [habitInsight, setHabitInsight] = useState('');
+const [habitLoading, setHabitLoading] = useState(false);
 
-  // 1. The Fetch Function
-  const fetchStatements = async () => {
+  const loadDashboard = async () => {
     if (!user) return;
-    
-    try {
-      const { data, error } = await supabase
-        .from('statements')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false }); // Newest first
+    setRefreshing(true);
 
-      if (error) throw error;
-      setStatements(data || []);
-    } catch (err) {
-      console.error('Error fetching data:', err);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+    // 1. Load Chart Data
+    const trends = await fetchMonthlyTrends(user.id);
+    setChartData(trends);
+    // 2. Load AI Insight (Background)
+    generateAiInsight();
+
+    // NEW: Yearly Habit Analysis
+  generateHabitInsight();
+
+    setRefreshing(false);
   };
 
-  // 2. Refresh when screen comes into focus
+  const generateAiInsight = async () => {
+    setInsightLoading(true);
+    // A. Get raw data
+    const txData = await fetchPreviousMonthData(user!.id);
+    
+    if (txData.length === 0) {
+      setInsight("No transactions found for the previous month to analyze.");
+      setInsightLoading(false);
+      return;
+    }
+
+    // B. Ask Cloud Function
+    const { data, error } = await supabase.functions.invoke('generate-insight', {
+      body: { transactions: txData }
+    });
+
+    if (data?.insight) setInsight(data.insight);
+    else setInsight("Could not generate insight at this time.");
+    
+    setInsightLoading(false);
+  };
+
+const generateHabitInsight = async () => {
+  setHabitLoading(true);
+
+  // 1. Get Aggregated Data (Last 3 Months)
+  const summary = await fetchRecentHabits(user!.id);
+
+  if (!summary) {
+    setHabitInsight("Upload more statements to unlock your personality!");
+    setHabitLoading(false);
+    return;
+  }
+
+  // 2. Ask AI
+  const { data } = await supabase.functions.invoke('analyze-habits', {
+    body: { summary } // No need to pass 'year' anymore
+  });
+
+  if (data?.result) setHabitInsight(data.result);
+  setHabitLoading(false);
+};
+
+  // Load on enter
   useFocusEffect(
     useCallback(() => {
-      fetchStatements();
-    }, [user])
+      loadDashboard();
+    }, [])
   );
 
-  // 3. Helper Logic
-  const hasData = statements.length > 0;
-  const latestStatement = hasData ? statements[0] : null;
-  
-  // Calculate potential (Income - Expenses) / 100 to convert cents to dollars
-  const potentialSavings = latestStatement 
-    ? (latestStatement.total_income - latestStatement.total_expenses) / 100 
-    : 0;
-  //Adding Trend Chart Data
-  
-  // CHART DATA PREP
-  // 1. Sort by date (Oldest first) for the chart, but limit to last 6 months
-  const chartStatements = [...statements]
-    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-    .slice(-6);
-
-  // 2. Map to Labels (e.g., "Nov")
-  const chartLabels = chartStatements.map(s => {
-    // Convert month number (11) to name (Nov)
-    const date = new Date(s.year, s.month - 1); 
-    return date.toLocaleString('default', { month: 'short' });
-  });
-
-  // 3. Map to Data (Savings in Dollars)
-  const chartData = chartStatements.map(s => {
-    // Savings = Income - Expenses
-    return (s.total_income - s.total_expenses) / 100;
-  });
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" />
-
-      {/* ZONE 1: HEADER */}
-      <View style={styles.headerContainer}>
-        <View style={styles.greetingRow}>
-          <Text style={styles.greetingText}>
-            Hello, {user?.email?.split('@')[0]} 👋
-          </Text>
-          <View style={styles.profileIcon} />
-        </View>
-
-      <Pressable 
-          style={styles.searchBar} 
-          onPress={() => router.push('./search')}
-        >
-          {/* Keep the icon/text styles you already had */}
-          <Text style={styles.searchPlaceholder}>🔍 Ask AI: "How much did I spend on Uber?"</Text>
-        </Pressable>
-      </View>
-
       <ScrollView 
-        contentContainerStyle={styles.scrollContent}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={() => {
-            setRefreshing(true);
-            fetchStatements();
-          }} />
-        }
+        contentContainerStyle={{ paddingBottom: 100 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadDashboard} />}
       >
-        
-        {/* ZONE 2: HERO CARD */}
-        {loading ? (
-           <View style={[styles.card, {justifyContent:'center', alignItems:'center'}]}>
-             <ActivityIndicator color="#000" />
-           </View>
-        ) : (
-          <View style={[styles.card, hasData ? styles.activeCard : styles.emptyCard]}>
-            {hasData ? (
-              // State B: Active Data
-              <View>
-                <Text style={styles.cardLabel}>
-                  Result for {latestStatement?.month}/{latestStatement?.year}
-                </Text>
-                <Text style={styles.bigNumber}>
-                  R{potentialSavings.toFixed(2)}
-                </Text>
-                <View style={styles.trendTag}>
-                  <Text style={styles.trendText}>Based on last upload</Text>
-                </View>
-              </View>
-            ) : (
-              // State A: Empty State
-              <View style={styles.centerContent}>
-                <Text style={styles.emptyIcon}>📄</Text>
-                <Text style={styles.emptyTitle}>No statements yet</Text>
-                <Text style={styles.emptySubtext}>
-                  Upload your last bank statement to unlock savings insights.
-                </Text>
-              </View>
-            )}
-          </View>
-        )}
+        {/* Header */}
+   {/* Updated Header */}
+<View style={styles.header}>
+  <View>
+    <Text style={styles.greeting}>Hi {user?.email?.split('@')[0]},</Text>
+    <Text style={styles.subGreeting}>Unwrap Your Finances</Text>
+  </View>
+  <Pressable style={styles.uploadBtn} onPress={() => router.push('/modal')}>
+    <Ionicons name="add" size={24} color="#fff" />
+  </Pressable>
+</View>
 
-        {/* ZONE 3: ACTIONS & HISTORY */}
-        <Pressable 
-          style={styles.uploadButton}
-          onPress={() => router.push('/modal')}
-        >
-          <Text style={styles.uploadButtonText}>[ + ] Upload New Statement</Text>
+{/* ... Chart ... */}
+
+{/* ... Monthly Insight Card ... */}
+
+{/* NEW: HABIT CARD */}
+<View style={[styles.insightCard, { borderLeftColor: '#3182CE', backgroundColor: '#EBF8FF' }]}>
+  <View style={styles.insightHeader}>
+     <Ionicons name="person" size={18} color="#3182CE" />
+     <Text style={[styles.insightTitle, { color: '#2B6CB0' }]}>Your Financial Vibe</Text>
+  </View>
+
+  {habitLoading ? (
+    <ActivityIndicator color="#3182CE" style={{ marginTop: 10 }} />
+  ) : (
+    <Text style={[styles.insightText, { color: '#2C5282' }]}>{habitInsight}</Text>
+  )}
+</View>
+
+        {/* Search Bar */}
+        <Pressable style={styles.searchBar} onPress={() => router.push('/search')}>
+          <Ionicons name="search" size={20} color="#999" style={{ marginRight: 10 }} />
+          <Text style={{ color: '#999' }}>Ask AI about your finances...</Text>
         </Pressable>
-        {/* --- NEW CHART HERE --- */}
-        <TrendChart labels={chartLabels} data={chartData} />
 
-      <Text style={styles.sectionTitle}>Recent Uploads</Text>
-        
-        {statements.map((stmt) => (
-          <Pressable 
-            key={stmt.id} 
-            // NAVIGATE TO THE NEW PAGE WITH THE ID
-            onPress={() => router.push(`./statement/${stmt.id}`)}
-          >
-            <View style={styles.historyItem}>
-              <View>
-                 <Text style={styles.historyDate}>Statement {stmt.month}/{stmt.year}</Text>
-                 <Text style={{fontSize:12, color:'#999'}}>
-                   In: R{(stmt.total_income/100).toFixed(0)} • Out: R{(stmt.total_expenses/100).toFixed(0)}
-                 </Text>
-              </View>
-              <Text style={styles.statusDone}>Processed ›</Text>
-            </View>
-          </Pressable>
-        ))}
-        {!hasData && !loading && (
-          <Text style={{color:'#999', textAlign:'center', marginTop: 20}}>
-            Your history will appear here.
-          </Text>
+        {/* 1. NEW: SPENDING TREND CHART */}
+        <Text style={styles.sectionTitle}>6 Month Trend (Expenses)</Text>
+        {chartData ? (
+          <LineChart
+            data={chartData}
+            width={screenWidth - 40} // Fit to screen with padding
+            height={220}
+            yAxisLabel="R"
+            yAxisSuffix="k" // Optional: Format numbers if huge
+            fromZero={true}
+            chartConfig={{
+              backgroundColor: "#ffffff",
+              backgroundGradientFrom: "#ffffff",
+              backgroundGradientTo: "#ffffff",
+              decimalPlaces: 0, 
+              color: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
+              labelColor: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
+              style: { borderRadius: 16 },
+              propsForDots: { r: "6", strokeWidth: "2", stroke: "#000" }
+            }}
+            bezier // Makes the line curved
+            style={{ marginVertical: 8, borderRadius: 16, alignSelf: 'center' }}
+          />
+        ) : (
+          <ActivityIndicator color="#000" />
         )}
+
+        {/* 2. NEW: AI ANALYST CARD */}
+        <View style={styles.insightCard}>
+          <View style={styles.insightHeader}>
+             <Ionicons name="sparkles" size={18} color="#805AD5" />
+             <Text style={styles.insightTitle}>Last Month's Insight</Text>
+          </View>
+          
+          {insightLoading ? (
+            <ActivityIndicator color="#805AD5" style={{ marginTop: 10 }} />
+          ) : (
+            <Text style={styles.insightText}>{insight}</Text>
+          )}
+        </View>
 
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-// Reuse the exact same styles
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F5F5' },
-  headerContainer: { padding: 20, backgroundColor: '#fff', paddingTop: 50 },
-  greetingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
-  greetingText: { fontSize: 24, fontWeight: 'bold', color: '#333' },
-  profileIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#ddd' },
-  searchBar: { backgroundColor: '#f0f0f0', padding: 12, borderRadius: 10 },
-  searchPlaceholder: { color: '#888' },
-  scrollContent: { padding: 20 },
-  card: { padding: 25, borderRadius: 16, marginBottom: 20, minHeight: 180, justifyContent: 'center' },
-  emptyCard: { backgroundColor: '#fff', borderWidth: 2, borderColor: '#e0e0e0', borderStyle: 'dashed' },
-  activeCard: { backgroundColor: '#2D3748', shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 5, elevation: 5 },
-  centerContent: { alignItems: 'center' },
-  emptyIcon: { fontSize: 40, marginBottom: 10 },
-  emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 5 },
-  emptySubtext: { textAlign: 'center', color: '#666', lineHeight: 20 },
-  cardLabel: { color: '#A0AEC0', marginBottom: 5, textTransform: 'uppercase', fontSize: 12, fontWeight: '700' },
-  bigNumber: { color: '#fff', fontSize: 42, fontWeight: 'bold' },
-  trendTag: { backgroundColor: '#48BB78', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, marginTop: 10 },
-  trendText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
-  uploadButton: { backgroundColor: '#000', padding: 18, borderRadius: 12, alignItems: 'center', marginBottom: 30 },
-  uploadButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-  sectionTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 10, color: '#555' },
-  historyItem: { flexDirection: 'row', justifyContent: 'space-between', padding: 15, backgroundColor: '#fff', borderRadius: 8, marginBottom: 10, alignItems: 'center' },
-  historyDate: { fontWeight: '600', fontSize: 16 },
-  statusDone: { color: 'green', fontWeight: 'bold', fontSize: 12 },
+  container: { flex: 1, backgroundColor: '#F9FAFB', paddingHorizontal: 20 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, marginBottom: 20 },
+  greeting: { fontSize: 28, fontWeight: 'bold', color: '#1A202C' },
+  subGreeting: { fontSize: 14, color: '#718096' },
+  uploadBtn: { backgroundColor: '#000', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', elevation: 4 },
+  
+  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 12, marginBottom: 25, elevation: 1 },
+  
+  sectionTitle: { fontSize: 18, fontWeight: '700', marginBottom: 15, color: '#2D3748' },
+  
+  insightCard: { backgroundColor: '#FAF5FF', padding: 20, borderRadius: 16, marginTop: 20, borderLeftWidth: 4, borderLeftColor: '#805AD5' },
+  insightHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  insightTitle: { fontSize: 16, fontWeight: 'bold', color: '#6B46C1' },
+  insightText: { fontSize: 15, color: '#553C9A', lineHeight: 22 }
 });

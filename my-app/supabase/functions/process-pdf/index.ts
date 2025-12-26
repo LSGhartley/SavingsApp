@@ -60,10 +60,29 @@ serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: `Extract transactions from this bank statement text into a JSON array.
-            Format: [{ "date": "YYYY-MM-DD", "desc": "Description", "amount": 10.00, "type": "expense" }]
-            - Use "income" for deposits/salaries.
-            - Return ONLY valid JSON. No markdown.`
+            content: `You are a banking data extraction AI. 
+            
+            TASK 1: Extract Metadata
+            Find the "Bank Name" (e.g., Standard Bank, FNB, Capitec, Tymebank, ABSA) and "Account Number".
+            
+            TASK 2: Extract Transactions
+            List all transactions.
+            
+            TASK 3: Categorize
+            Assign a category to each transaction from this list ONLY:
+            ['Food', 'Transport', 'Utilities', 'Entertainment', 'Shopping', 'Health', 'Salary', 'Cash/ATM', 'Savings/Investments', 'Loans', 'EFT/Transfer', 'Uncategorized'].
+
+            OUTPUT FORMAT (JSON ONLY):
+            {
+              "metadata": {
+                "bank": "Bank Name",
+                "account": "12345"
+              },
+              "transactions": [
+                { "date": "YYYY-MM-DD", "desc": "Description", "amount": 100.00, "type": "expense", "category": "Food" }
+              ]
+            }
+            `
           },
           {
             role: 'user',
@@ -81,11 +100,14 @@ serve(async (req) => {
     }
 
     // Clean JSON
+  // ... inside the try/catch block ...
+    
+    // Clean JSON
     const content = aiData.choices[0].message.content;
     const cleanJson = content.replace(/```json/g, '').replace(/```/g, '').trim();
-    const transactions = JSON.parse(cleanJson);
+    const resultData = JSON.parse(cleanJson); // This now has { metadata, transactions }
 
-    return new Response(JSON.stringify({ success: true, data: transactions }), {
+    return new Response(JSON.stringify({ success: true, data: resultData }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 

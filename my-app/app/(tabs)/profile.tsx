@@ -1,119 +1,124 @@
-import React from 'react';
-import { StyleSheet, Text, View, Pressable, Image, SafeAreaView, Alert } from 'react-native';
-import { supabase } from '@/lib/supabase';
-import { useAuth } from '@/contexts/AuthProvider';
+import React, { useEffect, useState } from 'react';
+import { StyleSheet, Text, View, FlatList, TouchableOpacity, Alert, RefreshControl, SafeAreaView, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { classifyTransaction } from '@/services/aiService';
+import { useAuth } from '@/contexts/AuthProvider'; // Adjust path if needed
+import { supabase } from '@/lib/supabase';        // Adjust path if needed
 
 export default function ProfileScreen() {
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
+  const [statements, setStatements] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const handleTestAI = async () => {
-  Alert.alert("Testing AI...", "Sending 'McDonalds' to ChatGPT...");
-  const result = await classifyTransaction("McDonalds 555 Main St", 15.50);
-  Alert.alert("AI Result", `ChatGPT thinks this is: ${result}`);
-};
+  // Load statements when screen opens
+  useEffect(() => {
+    fetchStatements();
+  }, []);
 
-  const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) Alert.alert("Error", error.message);
-    // The AuthProvider in _layout.tsx will automatically detect the logout 
-    // and kick you back to the Login screen.
+  const fetchStatements = async () => {
+    setLoading(true);
+    const { data } = await supabase
+      .from('statements')
+      .select('*')
+      .eq('user_id', user?.id)
+      .order('created_at', { ascending: false });
+      
+    if (data) setStatements(data);
+    setLoading(false);
   };
+
+  const handleDelete = async (id: string, fileName: string) => {
+    Alert.alert("Delete Statement", `Are you sure you want to delete ${fileName}?`, [
+      { text: "Cancel", style: "cancel" },
+      { 
+        text: "Delete", 
+        style: "destructive",
+        onPress: async () => {
+          // Supabase Cascade will automatically delete the transactions/chunks too
+          const { error } = await supabase.from('statements').delete().eq('id', id);
+          if (error) Alert.alert("Error", error.message);
+          else fetchStatements(); // Refresh list
+        }
+      }
+    ]);
+  };
+
+  // Helper to get initials
+  const getInitials = () => {
+    const email = user?.email || "User";
+    return email.substring(0, 2).toUpperCase();
+  };
+
+  const renderStatement = ({ item }: { item: any }) => (
+    <View style={styles.card}>
+      <View style={styles.iconBox}>
+        <Ionicons name="document-text" size={24} color="#4A5568" />
+      </View>
+      <View style={{ flex: 1, marginLeft: 12 }}>
+        <Text style={styles.bank}>{item.origin_bank || 'Unknown Bank'}</Text>
+        <Text style={styles.meta}>
+          {item.month}/{item.year} • {item.account_number || '****'}
+        </Text>
+      </View>
+      <TouchableOpacity onPress={() => handleDelete(item.id, item.raw_text)} style={{padding: 5}}>
+        <Ionicons name="trash-outline" size={20} color="#E53E3E" />
+      </TouchableOpacity>
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header Profile Section */}
       <View style={styles.header}>
         <View style={styles.avatar}>
-           <Text style={styles.avatarText}>
-             {user?.email?.charAt(0).toUpperCase() || "U"}
-           </Text>
+          <Text style={styles.avatarText}>{getInitials()}</Text>
         </View>
+        <Text style={styles.name}>My Profile</Text>
         <Text style={styles.email}>{user?.email}</Text>
-        <Text style={styles.badge}>Free Plan</Text>
-      </View>
-
-      {/* Settings Options */}
-      <View style={styles.menu}>
         
-        <Pressable style={styles.menuItem}>
-          <View style={styles.menuLeft}>
-            <Ionicons name="settings-outline" size={24} color="#333" />
-            <Text style={styles.menuText}>App Preferences</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color="#ccc" />
-        </Pressable>
-
-        <Pressable style={styles.menuItem}>
-          <View style={styles.menuLeft}>
-            <Ionicons name="shield-checkmark-outline" size={24} color="#333" />
-            <Text style={styles.menuText}>Security & Privacy</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color="#ccc" />
-        </Pressable>
-
-        <Pressable style={styles.menuItem}>
-          <View style={styles.menuLeft}>
-            <Ionicons name="help-circle-outline" size={24} color="#333" />
-            <Text style={styles.menuText}>Help & Support</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color="#ccc" />
-        </Pressable>
-
+        <TouchableOpacity style={styles.logoutBtn} onPress={signOut}>
+          <Text style={styles.logoutText}>Sign Out</Text>
+        </TouchableOpacity>
       </View>
-{/* TEST BUTTON */}
-  <Pressable 
-    style={[styles.logoutButton, { borderColor: '#48BB78', marginBottom: 10 }]} 
-    onPress={handleTestAI}
-  >
-    <Text style={{color: '#48BB78', fontWeight: 'bold'}}>Test AI Connection</Text>
-  </Pressable>
-      {/* Logout Button */}
-      <Pressable style={styles.logoutButton} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Log Out</Text>
-      </Pressable>
 
-      <Text style={styles.version}>Version 1.0.0 (Week 3 Build)</Text>
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>My Data</Text>
+        <Text style={styles.sectionSub}>Manage your uploaded statements</Text>
+        
+        {loading && statements.length === 0 ? (
+          <ActivityIndicator style={{marginTop: 20}} />
+        ) : (
+          <FlatList
+            data={statements}
+            keyExtractor={i => i.id}
+            renderItem={renderStatement}
+            refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchStatements} />}
+            ListEmptyComponent={
+              <Text style={styles.emptyText}>No statements uploaded yet.</Text>
+            }
+            contentContainerStyle={{ paddingBottom: 20 }}
+          />
+        )}
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F5F5' },
-  header: {
-    backgroundColor: '#fff',
-    padding: 30,
-    alignItems: 'center',
-    marginBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee'
-  },
-  avatar: {
-    width: 80, height: 80, borderRadius: 40,
-    backgroundColor: '#2D3748',
-    justifyContent: 'center', alignItems: 'center',
-    marginBottom: 15
-  },
-  avatarText: { fontSize: 32, color: '#fff', fontWeight: 'bold' },
-  email: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 5 },
-  badge: { 
-    backgroundColor: '#E2E8F0', paddingHorizontal: 10, paddingVertical: 4, 
-    borderRadius: 10, fontSize: 12, color: '#4A5568', fontWeight: 'bold' 
-  },
-  
-  menu: { backgroundColor: '#fff', paddingHorizontal: 20 },
-  menuItem: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: 20, borderBottomWidth: 1, borderBottomColor: '#f0f0f0'
-  },
-  menuLeft: { flexDirection: 'row', alignItems: 'center', gap: 15 },
-  menuText: { fontSize: 16, color: '#333' },
+  container: { flex: 1, backgroundColor: '#F7FAFC' },
+  header: { alignItems: 'center', padding: 30, backgroundColor: '#fff', borderBottomWidth: 1, borderColor: '#EDF2F7' },
+  avatar: { width: 70, height: 70, borderRadius: 35, backgroundColor: '#2D3748', justifyContent: 'center', alignItems: 'center', marginBottom: 12 },
+  avatarText: { color: '#fff', fontSize: 24, fontWeight: 'bold' },
+  name: { fontSize: 20, fontWeight: 'bold', color: '#2D3748' },
+  email: { fontSize: 14, color: '#718096', marginBottom: 15 },
+  logoutBtn: { paddingVertical: 8, paddingHorizontal: 20, backgroundColor: '#EDF2F7', borderRadius: 20 },
+  logoutText: { color: '#2D3748', fontWeight: '600', fontSize: 13 },
 
-  logoutButton: {
-    margin: 20, backgroundColor: '#fff', padding: 18, borderRadius: 12,
-    alignItems: 'center', borderWidth: 1, borderColor: '#F56565'
-  },
-  logoutText: { color: '#F56565', fontWeight: 'bold', fontSize: 16 },
-  version: { textAlign: 'center', color: '#999', fontSize: 12 }
+  section: { flex: 1, padding: 20 },
+  sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#2D3748' },
+  sectionSub: { fontSize: 13, color: '#718096', marginBottom: 15 },
+  
+  card: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 15, borderRadius: 12, marginBottom: 10, shadowColor: "#000", shadowOpacity: 0.03, shadowRadius: 3, elevation: 1 },
+  iconBox: { width: 40, height: 40, borderRadius: 8, backgroundColor: '#EDF2F7', justifyContent: 'center', alignItems: 'center' },
+  bank: { fontWeight: '600', fontSize: 15, color: '#2D3748' },
+  meta: { fontSize: 12, color: '#718096', marginTop: 2 },
+  emptyText: { textAlign: 'center', color: '#A0AEC0', marginTop: 20 }
 });
