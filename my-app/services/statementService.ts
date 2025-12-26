@@ -90,3 +90,63 @@ export const saveTransactions = async (statementId: string, transactions: any[])
     return { success: false, error };
   }
 };
+
+export const updateCategory = async (transactionId: string, newCategory: string) => {
+  try {
+    const { error } = await supabase
+      .from('transactions')
+      .update({ category: newCategory })
+      .eq('id', transactionId);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (error) {
+    console.error('Error updating category:', error);
+    return { success: false, error };
+  }
+};
+
+export const deleteStatement = async (statementId: string) => {
+  try {
+    // 1. Delete the Statement
+    // (If your DB is set up correctly with 'Cascade', this kills the transactions too.
+    // If not, we will fix that in the SQL step below.)
+    const { error } = await supabase
+      .from('statements')
+      .delete()
+      .eq('id', statementId);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (error) {
+    console.error('Error deleting statement:', error);
+    return { success: false, error };
+  }
+};
+
+// services/statementService.ts
+// services/statementService.ts
+
+export const searchTransactions = async (userId: string, query: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('transactions')
+      .select(`
+        *,
+        statements!transactions_statement_id_fkey ( month, year )
+      `)
+      // Search description OR category
+      .or(`description.ilike.%${query}%,category.ilike.%${query}%`)
+      // --- DELETED THE .eq('statements....') LINE ---
+      // We rely on RLS to filter users automatically
+      .order('date', { ascending: false });
+
+    if (error) throw error;
+    
+    // Filter out any broken links just in case
+    return data.filter(item => item.statements !== null);
+  } catch (error) {
+    console.error('Search error:', error);
+    return [];
+  }
+};

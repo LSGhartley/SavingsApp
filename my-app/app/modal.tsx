@@ -1,180 +1,221 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
+import { StyleSheet, Text, View, Pressable, ActivityIndicator, Alert, SafeAreaView, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { uploadStatement } from '../services/statementService';
+import * as DocumentPicker from 'expo-document-picker';
+import { Ionicons } from '@expo/vector-icons';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthProvider';
+import { uploadStatement } from '../services/statementService';
 
 export default function ModalScreen() {
-  const { user } = useAuth(); // <--- Get the real user
+  const { user } = useAuth();
   const router = useRouter();
   
-  // State for the form
-  const [month, setMonth] = useState('11'); // Default to current month (example)
-  const [year, setYear] = useState('2025');
-  const [rawText, setRawText] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
 
-  const handleNext = async () => {
-    // A. Visual Feedback: Change button text or show spinner (Simple alert for now)
-    console.log("Saving to Supabase...");
-    
-    // B. Call the service
-    // HARDCODED USER ID FOR TESTING: 
-    // Go to Supabase -> Authentication -> Users. Copy a UUID or create a fake one if empty.
-    // If you have NO users in Supabase yet, create a dummy row in 'profiles' table and use that ID.
-    const TEST_USER_ID = 'fe0c2354-7ea8-4bf9-83b4-0d9958dbff12';
-  
-    const result = await uploadStatement({
-      userId: user?.id as string,  // <--- Pass the real ID
-      month: parseInt(month),
-      year: parseInt(year),
-      rawText,
-    });
+  // 1. PICK THE PDF
+  const pickDocument = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'image/*'], // Allow PDF or Images
+        copyToCacheDirectory: true,
+      });
 
-    if (result.success) {
-      // URL Encode the text so it doesn't break the link
-      const encodedText = encodeURIComponent(rawText);
-      console.log("Success! Statement ID:", result.data.id);
-       // Pass the text AND the Statement ID (we need this to save transactions later)
-    console.log("DEBUG RAW TEXT:", rawText);
-    // Add &year=${year} to the end
-      router.push(`/verify?text=${encodedText}&statementId=${result.data.id}&year=${year}`);
-    } else {
-      alert("Error saving statement. Please try again.");
+      if (result.canceled) return;
+
+      const file = result.assets[0];
+      // Check size (e.g. limit to 5MB)
+      if (file.size && file.size > 5 * 1024 * 1024) {
+        Alert.alert("File too large", "Please choose a file under 5MB.");
+        return;
+      }
+      setSelectedFile(file);
+    } catch (err) {
+      console.error('Pick error:', err);
     }
   };
 
+  // 2. UPLOAD TO SUPABASE
+const handleUpload = async () => {
+    if (!selectedFile || !user) return;
+
+    setUploading(true);
+    try {
+      // 1. Prepare Blob
+      const response = await fetch(selectedFile.uri);
+      const blob = await response.blob();
+
+      // 2. Upload to Storage
+      const fileExt = selectedFile.name.split('.').pop();
+      const fileName = `${user.id}/${Date.now()}.${fileExt}`;
+
+      const { data, error } = await supabase.storage
+        .from('statements')
+        .upload(fileName, blob, {
+          contentType: selectedFile.mimeType || 'application/pdf',
+          upsert: false
+        });
+
+      if (error) throw error;
+
+      console.log("Upload Success:", data.path);
+
+      // 3. CREATE DATABASE RECORD (The Missing Step!)
+      // We use the existing service to create a statement row
+      // FIX: Calculate month/year automatically based on today
+      const now = new Date();
+      const currentMonth = now.getMonth() + 1; // JS months are 0-11
+      const currentYear = now.getFullYear();
+
+      const stmtResult = await uploadStatement({
+        userId: user.id,
+        month: currentMonth, 
+        year: currentYear,
+        rawText: `PDF Upload: ${selectedFile.name}`, // Placeholder text
+      });
+
+      if (!stmtResult.success) {
+        throw new Error("Failed to create statement record in database");
+      }
+
+      // 4. Navigate with the ID
+      router.push({
+        pathname: '/verify',
+        params: { 
+          filePath: data.path,
+          fileName: selectedFile.name,
+          statementId: stmtResult.data.id, // <--- PASS THE NEW ID HERE
+          year: currentYear.toString()
+        }
+      });
+
+    } catch (error: any) {
+      console.error("Upload Error:", error);
+      Alert.alert("Upload Failed", error.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+  // Helper to decode Base64 for Supabase (React Native specific)
+  const decode = (base64: string) => {
+    const binaryString = atob(base64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+  };
+
   return (
-    <KeyboardAvoidingView 
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={styles.container}
-    >
-      <StatusBar style={Platform.OS === 'ios' ? 'light' : 'auto'} />
+    <SafeAreaView style={styles.container}>
+      <StatusBar style="auto" />
       
-      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>New Statement</Text>
-        <Text style={styles.subtitle}>Copy text from your bank PDF or CSV and paste it here.</Text>
+        <Text style={styles.title}>Upload Statement</Text>
+        <Text style={styles.subtitle}>We accept PDF bank statements</Text>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <View style={styles.content}>
         
-        {/* Date Selection */}
-        <View style={styles.row}>
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Month (1-12)</Text>
-            <TextInput 
-              style={styles.input} 
-              keyboardType="numeric"
-              value={month}
-              onChangeText={setMonth}
-              maxLength={2}
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Year</Text>
-            <TextInput 
-              style={styles.input} 
-              keyboardType="numeric"
-              value={year}
-              onChangeText={setYear}
-              maxLength={4}
-            />
-          </View>
-        </View>
-
-        {/* The Big Paste Area */}
-        <Text style={styles.label}>Statement Data</Text>
-        <TextInput
-          style={styles.textArea}
-          multiline
-          placeholder="Paste your transaction history here...
-          
-Example:
-Nov 01   Uber         $15.20
-Nov 02   Starbucks    $5.40"
-          placeholderTextColor="#999"
-          value={rawText}
-          onChangeText={setRawText}
-          textAlignVertical="top" // Important for Android
-        />
-
-        {/* Action Button */}
-        <Pressable style={styles.processButton} onPress={handleNext}>
-          <Text style={styles.buttonText}>Process Data →</Text>
+        {/* DROP ZONE UI */}
+        <Pressable style={styles.dropZone} onPress={pickDocument}>
+          {selectedFile ? (
+            // STATE: File Selected
+            <View style={styles.filePreview}>
+              <Ionicons name="document-text" size={48} color="#48BB78" />
+              <Text style={styles.fileName}>{selectedFile.name}</Text>
+              <Text style={styles.fileSize}>
+                {(selectedFile.size ? selectedFile.size / 1024 : 0).toFixed(0)} KB
+              </Text>
+              <Text style={styles.changeText}>Tap to change</Text>
+            </View>
+          ) : (
+            // STATE: Empty
+            <View style={styles.emptyPreview}>
+              <View style={styles.iconCircle}>
+                <Ionicons name="cloud-upload-outline" size={32} color="#666" />
+              </View>
+              <Text style={styles.dropText}>Tap to select a PDF</Text>
+            </View>
+          )}
         </Pressable>
 
-      </ScrollView>
-    </KeyboardAvoidingView>
+        {/* SECURITY NOTE */}
+        <View style={styles.securityNote}>
+          <Ionicons name="lock-closed" size={14} color="#666" />
+          <Text style={styles.securityText}>
+            Your files are encrypted and processed privately.
+          </Text>
+        </View>
+
+      </View>
+
+      {/* FOOTER ACTION */}
+      <View style={styles.footer}>
+        <Pressable 
+          style={[styles.processButton, (!selectedFile || uploading) && styles.disabledBtn]} 
+          onPress={handleUpload}
+          disabled={!selectedFile || uploading}
+        >
+          {uploading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.buttonText}>Process with AI →</Text>
+          )}
+        </Pressable>
+      </View>
+    </SafeAreaView>
   );
 }
 
+// Add 'atob' polyfill for React Native if not present
+if (typeof global.atob === 'undefined') {
+  global.atob = (input) => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+    let str = String(input).replace(/=+$/, '');
+    let output = '';
+    for (
+      let bc = 0, bs = 0, buffer, idx = 0;
+      (buffer = str.charAt(idx++));
+      ~buffer && ((bs = bc % 4 ? bs * 64 + buffer : buffer), bc++ % 4)
+        ? (output += String.fromCharCode(255 & (bs >> ((-2 * bc) & 6))))
+        : 0
+    ) {
+      buffer = chars.indexOf(buffer);
+    }
+    return output;
+  };
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
+  container: { flex: 1, backgroundColor: '#fff' },
+  header: { padding: 25, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 5 },
+  subtitle: { fontSize: 15, color: '#666' },
+  content: { flex: 1, padding: 25, justifyContent: 'center' },
+  
+  dropZone: {
+    borderWidth: 2, borderColor: '#e0e0e0', borderStyle: 'dashed',
+    borderRadius: 20, height: 250, justifyContent: 'center', alignItems: 'center',
+    backgroundColor: '#fafafa'
   },
-  header: {
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-    marginTop: 10,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    marginBottom: 5,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#666',
-  },
-  scrollContent: {
-    padding: 20,
-  },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-  },
-  inputGroup: {
-    width: '48%',
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
-    color: '#333',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    backgroundColor: '#f9f9f9',
-  },
-  textArea: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 15,
-    fontSize: 14,
-    backgroundColor: '#f9f9f9',
-    height: 250, // Tall box for pasting
-    marginBottom: 20,
-  },
-  processButton: {
-    backgroundColor: '#000',
-    padding: 16,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginBottom: 40,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  emptyPreview: { alignItems: 'center' },
+  iconCircle: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#eee', justifyContent: 'center', alignItems: 'center', marginBottom: 15 },
+  dropText: { fontSize: 16, fontWeight: '600', color: '#555' },
+  
+  filePreview: { alignItems: 'center' },
+  fileName: { fontSize: 16, fontWeight: 'bold', marginTop: 10, textAlign: 'center' },
+  fileSize: { color: '#999', marginBottom: 10 },
+  changeText: { color: '#3182CE', fontWeight: 'bold' },
+
+  securityNote: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 20, gap: 5 },
+  securityText: { color: '#666', fontSize: 12 },
+
+  footer: { padding: 25 },
+  processButton: { backgroundColor: '#000', padding: 18, borderRadius: 12, alignItems: 'center' },
+  disabledBtn: { backgroundColor: '#ccc' },
+  buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' }
 });

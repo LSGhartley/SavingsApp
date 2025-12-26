@@ -11,8 +11,9 @@ import {
   ActivityIndicator
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { supabase } from '@/lib/supabase'; // Adjust path if needed (e.g. '../lib/supabase')
-import { useAuth } from '@/contexts/AuthProvider'; // Adjust path if needed
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthProvider';
+import { TrendChart } from '@/components/TrendChart';
 
 // Define the shape of our data
 interface Statement {
@@ -68,7 +69,26 @@ export default function Dashboard() {
   const potentialSavings = latestStatement 
     ? (latestStatement.total_income - latestStatement.total_expenses) / 100 
     : 0;
+  //Adding Trend Chart Data
+  
+  // CHART DATA PREP
+  // 1. Sort by date (Oldest first) for the chart, but limit to last 6 months
+  const chartStatements = [...statements]
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    .slice(-6);
 
+  // 2. Map to Labels (e.g., "Nov")
+  const chartLabels = chartStatements.map(s => {
+    // Convert month number (11) to name (Nov)
+    const date = new Date(s.year, s.month - 1); 
+    return date.toLocaleString('default', { month: 'short' });
+  });
+
+  // 3. Map to Data (Savings in Dollars)
+  const chartData = chartStatements.map(s => {
+    // Savings = Income - Expenses
+    return (s.total_income - s.total_expenses) / 100;
+  });
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
@@ -82,9 +102,13 @@ export default function Dashboard() {
           <View style={styles.profileIcon} />
         </View>
 
-        <View style={styles.searchBar}>
-          <Text style={styles.searchPlaceholder}>Ask AI: "How much did I spend?"</Text>
-        </View>
+      <Pressable 
+          style={styles.searchBar} 
+          onPress={() => router.push('./search')}
+        >
+          {/* Keep the icon/text styles you already had */}
+          <Text style={styles.searchPlaceholder}>🔍 Ask AI: "How much did I spend on Uber?"</Text>
+        </Pressable>
       </View>
 
       <ScrollView 
@@ -137,21 +161,28 @@ export default function Dashboard() {
         >
           <Text style={styles.uploadButtonText}>[ + ] Upload New Statement</Text>
         </Pressable>
+        {/* --- NEW CHART HERE --- */}
+        <TrendChart labels={chartLabels} data={chartData} />
 
-        <Text style={styles.sectionTitle}>Recent Uploads</Text>
+      <Text style={styles.sectionTitle}>Recent Uploads</Text>
         
         {statements.map((stmt) => (
-          <View key={stmt.id} style={styles.historyItem}>
-            <View>
-               <Text style={styles.historyDate}>Statement {stmt.month}/{stmt.year}</Text>
-               <Text style={{fontSize:12, color:'#999'}}>
-                 In: R{(stmt.total_income/100).toFixed(0)} • Out: R{(stmt.total_expenses/100).toFixed(0)}
-               </Text>
+          <Pressable 
+            key={stmt.id} 
+            // NAVIGATE TO THE NEW PAGE WITH THE ID
+            onPress={() => router.push(`./statement/${stmt.id}`)}
+          >
+            <View style={styles.historyItem}>
+              <View>
+                 <Text style={styles.historyDate}>Statement {stmt.month}/{stmt.year}</Text>
+                 <Text style={{fontSize:12, color:'#999'}}>
+                   In: R{(stmt.total_income/100).toFixed(0)} • Out: R{(stmt.total_expenses/100).toFixed(0)}
+                 </Text>
+              </View>
+              <Text style={styles.statusDone}>Processed ›</Text>
             </View>
-            <Text style={styles.statusDone}>Processed</Text>
-          </View>
+          </Pressable>
         ))}
-        
         {!hasData && !loading && (
           <Text style={{color:'#999', textAlign:'center', marginTop: 20}}>
             Your history will appear here.
@@ -163,7 +194,7 @@ export default function Dashboard() {
   );
 }
 
-// Reuse the exact same styles from Day 2
+// Reuse the exact same styles
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F5F5F5' },
   headerContainer: { padding: 20, backgroundColor: '#fff', paddingTop: 50 },
