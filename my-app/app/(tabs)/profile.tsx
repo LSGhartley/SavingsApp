@@ -74,7 +74,10 @@ export default function ProfileScreen() {
         <Text style={styles.name}>My Profile</Text>
         <Text style={styles.email}>{user?.email}</Text>
         
-        <TouchableOpacity style={styles.logoutBtn} onPress={signOut}>
+        <TouchableOpacity 
+          style={styles.logoutBtn} 
+          onPress={() => signOut()} // Call the function
+        >
           <Text style={styles.logoutText}>Sign Out</Text>
         </TouchableOpacity>
       </View>
